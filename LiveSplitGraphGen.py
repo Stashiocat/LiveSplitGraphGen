@@ -69,6 +69,48 @@ def GetSegmentHistory(inSegment):
             outTimes.append(realTime)
         
     return outTimes
+    
+def GetStandardDevForSegment(inSegment):
+    segHist = inSegment.find("SegmentHistory")
+    
+    if segHist is None:
+        return None
+        
+    runLengths = []
+    
+    numRuns = 0
+    avg = 0.0
+    for time in segHist:
+        realTimeSeg = time.find("RealTime")
+        if realTimeSeg is not None:
+            realTime = TimeToSeconds(realTimeSeg.text)
+            runLengths.append(realTime)
+        
+    reducedRunLengths = []
+    for i in range(int(len(runLengths) * 0.30)):
+        ix = len(runLengths) - i - 1
+        reducedRunLengths.append(runLengths[ix])
+
+    p = pd.Series(reducedRunLengths)
+    p = [x for x in p[p.between(p.quantile(0.05), p.quantile(0.96))]]
+    
+    for rt in p:
+        avg += rt
+        numRuns += 1
+        
+    avg /= numRuns
+    
+    outStandardDev = 0.0
+    for runLength in p:
+        c = abs(runLength - avg)**2
+        outStandardDev += c
+        
+    if numRuns > 1:
+        outStandardDev = math.sqrt(outStandardDev / (numRuns - 1))
+    else:
+        outStandardDev = 0.0
+        
+    return outStandardDev
 
 # BuildRealTimeMapping() Output looks like this:
 # {
@@ -143,12 +185,32 @@ def DumpSegmentGraphToFile(Directory, Seg):
         
         # Was messing with using Pandas to remove outliers, since those aren't helpful
         p = pd.Series(SegHist)
-        p = p[p.between(p.quantile(0.00), p.quantile(0.95))]
+        p = p[p.between(p.quantile(0.05), p.quantile(0.95))]
         
         ax.scatter([i+1 for i in range(len(p))], p, s=3)
         plt.xticks(rotation=90)
         plt.savefig("%s/SegmentLength_%s.png" % (Directory, GetSafeName(Seg.find("Name").text)), bbox_inches='tight')
         plt.close(fig)
+        
+def DumpSegmentStandardDevGraphToFile(Directory, Labels, Segs):
+    fig, ax = plt.subplots()
+    
+    ax.bar(range(len(Labels)), Segs)
+    plt.xticks(range(len(Labels)), Labels, rotation='vertical')
+    ax.set_ylabel("Standard Deviation")
+    ax.set_title("Standard deviations by segment")
+    plt.savefig("%s/StandardDeviations.png" % (Directory), bbox_inches='tight')
+    plt.close(fig)
+        
+def DumpSegmentStandardDev(Directory, Tree):
+    StdDevs = []
+    Labels = []
+    
+    for Seg in Tree.find("Segments"):
+        StdDevs.append(GetStandardDevForSegment(Seg))
+        Labels.append(GetSegmentName(Seg))
+    
+    DumpSegmentStandardDevGraphToFile(Directory, Labels, StdDevs)
 
 def DumpSegments(Directory, Tree):
     for Seg in Tree.find("Segments"):
@@ -172,7 +234,7 @@ def DumpBestTimesToSegment(Directory, Tree, RealTimeMapping):
         ax.set_ylabel("Time")
         ax.yaxis.set_major_formatter(tkr.FuncFormatter(TimeFormatter))
         p = pd.Series(segTimes)
-        p = p[p.between(p.quantile(0.00), p.quantile(0.95))]
+        p = p[p.between(p.quantile(0.05), p.quantile(0.95))]
         #ax.plot(p)
         
         ax.scatter([i+1 for i in range(len(p))], p, s=3)
@@ -260,6 +322,10 @@ if __name__ == '__main__':
     # Output graphs for segment times (this is the time that just this segment took, starting from the previous segment)
     print("Outputting segments... ")
     DumpSegments(Directory, Tree)
+    
+    # Output a graph showing the standard deviation for each segment
+    print("Outputting standard deviations... ")
+    DumpSegmentStandardDev(Directory, Tree)
     
     # Output graphs for best times being at a segment (this is the time since the start of the run)
     print("Outputting best times to segments... ")
